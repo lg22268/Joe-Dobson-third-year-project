@@ -32,6 +32,8 @@ import pandas as pd
 
 from numba import jit, njit
 
+import tempfile
+
 try:
     import adtree
     adtree_available = True
@@ -687,6 +689,55 @@ class ContinuousData(Data):
         '''
 
         return pd.DataFrame(self._data,columns=self._variables)
+    
+class MixedData(Data):
+    
+    
+    
+    def __init__(self, data, varnames=None, header=True, comments='#', delimiter=None, standardise=False):
+        
+        self.discrete_cols = []
+        self.continuous_cols = []
+        
+        # Check arity line
+        if type(data) == str:
+            with open(data, "r") as file:
+                line = file.readline().rstrip()
+                while len(line) == 0 or line[0] == '#':
+                    line = file.readline().rstrip()
+                varnames = line.split()
+                line = file.readline().rstrip()
+                while len(line) == 0 or line[0] == '#':
+                    line = file.readline().rstrip()
+                arity_fields = line.split()
+                for arity_index in range(len(arity_fields)):
+                    if arity_fields[arity_index] == 'c':
+                        self.continuous_cols.append(arity_index)
+                    else:
+                        self.discrete_cols.append(arity_index)
+                # Create temp files for discrete and continuous 
+                continuous_file = tempfile.NamedTemporaryFile(delete=True)
+                discrete_file = tempfile.NamedTemporaryFile(delete=True)
+                # Write header to respective files
+                continuous_file.write(" ".join([varnames[i] for i in self.continuous_cols]))
+                discrete_file.write(" ".join([varnames[i] for i in self.discrete_cols]))
+                # Write arity to discrete file
+                discrete_file.write(" ".join([arity_fields[i] for i in self.discrete_cols]))
+                # Write data to respective files
+                for line in file:
+                    fields = line.split()
+                    continuous_file.write(" ".join([fields[i] for i in self.continuous_cols]))
+                    discrete_file.write(" ".join([fields[i] for i in self.discrete_cols]))
+                
+                # Read line from file and split into discrete and continuous rows
+
+        else:
+            print("Data must be a filename")
+            return
+        
+       
+        
+
 
 
 # START Classes for penalised log-likelihood 
@@ -1384,3 +1435,5 @@ class BGe(ContinuousData):
                 self.bge_component(list(parents)+[child]) -
                 self.bge_component(parents), None)
 
+
+#class Bic_CG

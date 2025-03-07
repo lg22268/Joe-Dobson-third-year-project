@@ -1066,7 +1066,9 @@ class Gobnilp(Model):
         self._known_local_scores = frozenset([
             'BDeu','BGe',
             'DiscreteLL', 'DiscreteBIC', 'DiscreteAIC',
-            'GaussianLL', 'GaussianBIC', 'GaussianAIC', 'GaussianL0'])
+            'GaussianLL', 'GaussianBIC', 'GaussianAIC', 'GaussianL0',
+            'Bic_CG'
+            ])
 
     def _getmipvars(self,vtype):
         try:
@@ -3820,6 +3822,8 @@ class Gobnilp(Model):
                     local_score_fun_temp = BDeu(self._data,alpha=alpha).bdeu_score
                 elif score == 'BGe':
                     local_score_fun_temp = BGe(self._data, nu=nu, alpha_mu=alpha_mu, alpha_omega=alpha_omega).bge_score
+                elif score == 'Bic_CG':
+                    local_score_fun_temp = Bic_CG(self._data, nu=nu, alpha_mu=alpha_mu, alpha_omega=alpha_omega).bic_cg_score
                 else:
                     klass = globals()[score]
                     if score in frozenset(["DiscreteBIC", "DiscreteAIC","GaussianL0"]):
