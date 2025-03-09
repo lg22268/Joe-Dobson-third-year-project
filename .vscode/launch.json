@@ -21,8 +21,8 @@
                 "--nsols",
                 "2",
                 "--score",
-                "DiscreteLL",
-                "data/asia_10000.dat"
+                "Bic_CG",
+                "data/mixed_data.dat"
             ]
         }
     ]

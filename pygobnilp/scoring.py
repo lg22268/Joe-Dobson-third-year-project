@@ -716,8 +716,8 @@ class MixedData(Data):
                     else:
                         self.discrete_cols.append(arity_index)
                 # Create temp files for discrete and continuous 
-                continuous_file = tempfile.NamedTemporaryFile(delete=True)
-                discrete_file = tempfile.NamedTemporaryFile(delete=True)
+                continuous_file = tempfile.NamedTemporaryFile(delete=False)
+                discrete_file = tempfile.NamedTemporaryFile(delete=False)
                 # Write header to respective files
                 continuous_file.write(" ".join([varnames[i] for i in self.continuous_cols]))
                 discrete_file.write(" ".join([varnames[i] for i in self.discrete_cols]))
@@ -731,15 +731,18 @@ class MixedData(Data):
                 
                 # Read line from file and split into discrete and continuous rows
 
+                continuous_file.close()
+                discrete_file.close()
+                
+                # Construct discrete and continuous data objects
+                self.continuous_data = ContinuousData(continuous_file.name)
+                self.discrete_data = DiscreteData(discrete_file.name)
+                            
         else:
             print("Data must be a filename")
             return
         
        
-        
-
-
-
 # START Classes for penalised log-likelihood 
     
 class _AbsLLPenalised:
@@ -1436,4 +1439,8 @@ class BGe(ContinuousData):
                 self.bge_component(parents), None)
 
 
-#class Bic_CG
+class Bic_CG(MixedData):
+    
+    def __init__(self, data):
+        super().__init__(data)
+        
