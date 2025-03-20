@@ -56,10 +56,11 @@ except ImportError as e:
 
 try:
     from .scoring import (
-        DiscreteData, ContinuousData,
+        DiscreteData, ContinuousData, MixedData,
         BDeu, BGe,
         DiscreteLL, DiscreteBIC, DiscreteAIC,
-        GaussianLL, GaussianBIC, GaussianAIC, GaussianL0)
+        GaussianLL, GaussianBIC, GaussianAIC, GaussianL0,
+        MixedLL)
 except ImportError as e:
     print("Could not import score generating code!")
     print(e)
@@ -1067,7 +1068,7 @@ class Gobnilp(Model):
             'BDeu','BGe',
             'DiscreteLL', 'DiscreteBIC', 'DiscreteAIC',
             'GaussianLL', 'GaussianBIC', 'GaussianAIC', 'GaussianL0',
-            'Bic_CG'
+            'MixedLL'
             ])
 
     def _getmipvars(self,vtype):
@@ -3777,8 +3778,8 @@ class Gobnilp(Model):
         if score not in self._known_local_scores:
             raise ValueError("Unrecognised scoring function: {0}".format(score))            
 
-        if data_type != 'discrete' and data_type != 'continuous':
-            raise ValueError("Unrecognised data type: {0}. Should be either 'discrete' or 'continuous'".format(data_type))            
+        if data_type != 'discrete' and data_type != 'continuous' and data_type != 'mixed':
+            raise ValueError("Unrecognised data type: {0}. Should be 'discrete', 'continuous' or mixed".format(data_type))            
 
         if data_source is not None and local_scores_source is not None:
             raise ValueError("Data source {0} and local scores source {1} both specified. Should specify only one.".format(
@@ -3804,6 +3805,9 @@ class Gobnilp(Model):
                 elif data_type == 'continuous':
                     self._data = ContinuousData(data_source, varnames=varnames, header=header,
                                                 comments=comments, delimiter=delimiter, standardise=standardise)
+                elif data_type == 'mixed':
+                    self._data = MixedData(data_source, varnames=varnames, header=header,
+                                                comments=comments, delimiter=delimiter, standardise=standardise)
 
                 # BN variables always in order
                 self._bn_variables = sorted(self._data.variables())
@@ -3822,8 +3826,8 @@ class Gobnilp(Model):
                     local_score_fun_temp = BDeu(self._data,alpha=alpha).bdeu_score
                 elif score == 'BGe':
                     local_score_fun_temp = BGe(self._data, nu=nu, alpha_mu=alpha_mu, alpha_omega=alpha_omega).bge_score
-                elif score == 'Bic_CG':
-                    local_score_fun_temp = Bic_CG(self._data, nu=nu, alpha_mu=alpha_mu, alpha_omega=alpha_omega).bic_cg_score
+                elif score == 'MixedLL':
+                    local_score_fun_temp = MixedLL(self._data).score
                 else:
                     klass = globals()[score]
                     if score in frozenset(["DiscreteBIC", "DiscreteAIC","GaussianL0"]):

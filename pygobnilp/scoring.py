@@ -33,6 +33,7 @@ import pandas as pd
 from numba import jit, njit
 
 import tempfile
+import os
 
 try:
     import adtree
@@ -692,8 +693,7 @@ class ContinuousData(Data):
     
 class MixedData(Data):
     
-    
-    
+
     def __init__(self, data, varnames=None, header=True, comments='#', delimiter=None, standardise=False):
         
         self.discrete_cols = []
@@ -716,31 +716,40 @@ class MixedData(Data):
                     else:
                         self.discrete_cols.append(arity_index)
                 # Create temp files for discrete and continuous 
-                continuous_file = tempfile.NamedTemporaryFile(delete=False)
-                discrete_file = tempfile.NamedTemporaryFile(delete=False)
+                continuous_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
+                discrete_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
                 # Write header to respective files
-                continuous_file.write(" ".join([varnames[i] for i in self.continuous_cols]))
-                discrete_file.write(" ".join([varnames[i] for i in self.discrete_cols]))
+                continuous_file.write(" ".join([varnames[i] for i in self.continuous_cols]) + '\n')
+                discrete_file.write(" ".join([varnames[i] for i in self.discrete_cols]) + '\n')
                 # Write arity to discrete file
-                discrete_file.write(" ".join([arity_fields[i] for i in self.discrete_cols]))
+                discrete_file.write(" ".join([arity_fields[i] for i in self.discrete_cols]) + '\n')
                 # Write data to respective files
                 for line in file:
                     fields = line.split()
-                    continuous_file.write(" ".join([fields[i] for i in self.continuous_cols]))
-                    discrete_file.write(" ".join([fields[i] for i in self.discrete_cols]))
+                    continuous_file.write(" ".join([fields[i] for i in self.continuous_cols]) + '\n')
+                    discrete_file.write(" ".join([fields[i] for i in self.discrete_cols]) + '\n')
                 
                 # Read line from file and split into discrete and continuous rows
 
+                continuous_file_name = continuous_file.name
+                discrete_file_name = discrete_file.name
                 continuous_file.close()
                 discrete_file.close()
                 
                 # Construct discrete and continuous data objects
-                self.continuous_data = ContinuousData(continuous_file.name)
-                self.discrete_data = DiscreteData(discrete_file.name)
+                self.continuous_data = ContinuousData(continuous_file_name)
+                self.discrete_data = DiscreteData(discrete_file_name)
+                os.remove(continuous_file_name)
+                os.remove(discrete_file_name)
+                
+                self._variables = tuple(varnames)
+                
                             
-        else:
-            print("Data must be a filename")
-            return
+        elif type(data) == MixedData:
+            self.continuous_data = data.continuous_data
+            self.discrete_data = data.discrete_data
+            self._variables = data._variables
+
         
        
 # START Classes for penalised log-likelihood 
@@ -1128,7 +1137,7 @@ class BDeu(DiscreteData):
             raise ValueError('alpha (equivalent sample size) must be positive but was give {0}'.format(alpha))
         self._alpha = alpha
 
-    def clear_cache():
+    def clear_cache(self):
         '''Empty the cache of stored BDeu component scores
 
         This should be called, for example, if new scores are being computed
@@ -1438,9 +1447,70 @@ class BGe(ContinuousData):
                 self.bge_component(list(parents)+[child]) -
                 self.bge_component(parents), None)
 
+class MixedLL(MixedData):
+    def __init__(self, data, header=True, comments='#', delimiter=None, standardise=False, conn_matrix=None):
+        """
+        Initialize the Mixed Log-Likelihood class
 
-class Bic_CG(MixedData):
-    
-    def __init__(self, data):
-        super().__init__(data)
+        Parameters:
+            data: str or MixedData
+                Path to the .dat file or an existing MixedData instance.
+            header: bool
+                Whether the file has a header row.
+            comments: str
+                Character indicating comment lines.
+            delimiter: str
+                Field delimiter in the data file.
+            standardise: bool
+                Whether to standardize continuous variables.
+        """
         
+        self.conn_matrix = conn_matrix
+        self.parent_threshold = 0.5
+        
+        # Initialize MixedData, which processes the file
+        super().__init__(data, header=header, comments=comments, delimiter=delimiter, standardise=standardise)
+
+        # Create instances of DiscreteLL and GaussianLL using the separated datasets
+        self.discrete_ll = DiscreteLL(self.discrete_data)
+        self.gaussian_ll = GaussianLL(self.continuous_data)
+
+        # Create a boolean mask for discrete variables
+        self.discrete_mask = np.array([i in self.discrete_cols for i in range(len(self._variables))])
+
+    def compute_log_likelihood(self):
+        """
+        Computes the negative log-likelihood for mixed data.
+
+        Returns:
+            float: The negative log-likelihood score for mixed data
+        """
+        
+        
+        for node in range(len(self._variables)):
+            node_parent_sum = 0
+            for parent_node in range(len(self._variables)):
+                # Is it a parent
+                if self.conn_matrix[node][parent_node] > self.parent_threshold:
+                    # Compute score
+                    node_parent_sum += self.conn_matrix[node][parent_node] * data(parent_node, row)
+            local_score = log_pi(data(node, row) - node_parent_sum)
+        
+        
+        
+        
+        log_likelihood = 0.0
+
+        # Compute log-likelihood for discrete variables
+        for i in self.discrete_cols:
+            child_name = self._variables[i]
+            parents = [self._variables[j] for j in self.discrete_cols if j != i]  # Assuming discrete parents
+            log_likelihood += self.discrete_ll.score(child_name, parents)[0]
+
+        # Compute log-likelihood for continuous variables
+        for i in self.continuous_cols:
+            child_name = self._variables[i]
+            parents = [self._variables[j] for j in self.continuous_cols if j != i]  # Assuming continuous parents
+            log_likelihood += self.gaussian_ll.score(child_name, parents)[0]
+
+        return -log_likelihood  # Return negative log-likelihood for minimization

@@ -118,6 +118,8 @@ argdkt['output_ext'] = argdkt['output_ext'].split(',')
 s = argdkt['score']
 if s == "BGe" or s.startswith('Gaussian'):
     argdkt['data_type'] = 'continuous'
+elif s == "MixedLL":
+    argdkt['data_type'] = 'mixed'
 
 if argdkt['gurobi_params'] is not None:
     for argval in argdkt['gurobi_params']:

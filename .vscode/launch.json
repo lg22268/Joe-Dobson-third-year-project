@@ -21,7 +21,7 @@
                 "--nsols",
                 "2",
                 "--score",
-                "Bic_CG",
+                "MixedLL",
                 "data/mixed_data.dat"
             ]
         }
