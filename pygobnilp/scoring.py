@@ -699,6 +699,8 @@ class MixedData(Data):
         self.discrete_cols = []
         self.continuous_cols = []
         
+        self._is_discrete = []
+        
         # Check arity line
         if type(data) == str:
             with open(data, "r") as file:
@@ -713,8 +715,10 @@ class MixedData(Data):
                 for arity_index in range(len(arity_fields)):
                     if arity_fields[arity_index] == 'c':
                         self.continuous_cols.append(arity_index)
+                        self._is_discrete.append(False)
                     else:
                         self.discrete_cols.append(arity_index)
+                        self._is_discrete.append(True)
                 # Create temp files for discrete and continuous 
                 continuous_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
                 discrete_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
@@ -736,6 +740,7 @@ class MixedData(Data):
                 continuous_file.close()
                 discrete_file.close()
                 
+                         
                 # Construct discrete and continuous data objects
                 self.continuous_data = ContinuousData(continuous_file_name)
                 self.discrete_data = DiscreteData(discrete_file_name)
@@ -744,11 +749,17 @@ class MixedData(Data):
                 
                 self._variables = tuple(varnames)
                 
+                self._data = np.zeroes((self.discrete_data.data_length(), len(self._variables)))
+                self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
+                self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
+                
+                
                             
         elif type(data) == MixedData:
             self.continuous_data = data.continuous_data
             self.discrete_data = data.discrete_data
             self._variables = data._variables
+            self._data = data._data
 
         
        
@@ -1447,6 +1458,11 @@ class BGe(ContinuousData):
                 self.bge_component(list(parents)+[child]) -
                 self.bge_component(parents), None)
 
+
+
+
+    
+    
 class MixedLL(MixedData):
     def __init__(self, data, header=True, comments='#', delimiter=None, standardise=False, conn_matrix=None):
         """
@@ -1477,6 +1493,43 @@ class MixedLL(MixedData):
 
         # Create a boolean mask for discrete variables
         self.discrete_mask = np.array([i in self.discrete_cols for i in range(len(self._variables))])
+ 
+        # """Initialize Laplace distribution scoring for a dataset."""
+        # self._data = data
+        # self._n, self._p = data.shape
+        # self._variables = [f"X{i+1}" for i in range(self._p)]
+        
+        # Compute median and scale (b) for Laplace distribution
+        self._median = np.median(data, axis=0)
+        self._b = np.median(np.abs(data - self._median), axis=0) / np.log(2)
+
+
+    # def laplace_log_likelihood(self, variables):
+    #     """
+    #     Compute the Laplace log-likelihood for a subset of variables.
+    #     """
+    #     indices = [self._variables.index(v) for v in variables]
+    #     selected_data = self._data[:, indices]
+
+    #     # Compute Laplace log-likelihood
+    #     ll = -np.log(2 * self._b[indices]).sum() - np.abs(selected_data - self._median[indices]).sum() / self._b[indices]
+
+    #     return ll
+
+    # def laplace_score(self, child, parents):
+    #     """
+    #     Compute the Laplace log-likelihood score for a given child with its parent set.
+    #     """
+    #     parent_ll = self.laplace_log_likelihood(parents)
+    #     family_ll = self.laplace_log_likelihood([child] + parents)
+
+    #     return family_ll - parent_ll
+
+    def log_pi(self, val):
+        """
+        Compute the log of the Laplace density function.
+        """
+        return -np.log(2 * self._b) - np.abs(val - self._median) / self._b
 
     def compute_log_likelihood(self):
         """
@@ -1486,31 +1539,22 @@ class MixedLL(MixedData):
             float: The negative log-likelihood score for mixed data
         """
         
+   
+        for row in range(len(self._data)):
+            for node in range(len(self._variables)):
+                if self._is_discrete[node]:
+                    # TODO
+                    pass
+                else:
+                    node_parent_sum = 0
+                    for parent_node in range(len(self._variables)):
+                        # Is it a parent
+                        if self.conn_matrix[node][parent_node] > self.parent_threshold:
+                            # Compute score
+                            node_parent_sum += self.conn_matrix[node][parent_node] * self._data(parent_node, row)
+                    local_score = self.log_pi(self._data(node, row) - node_parent_sum)
         
-        for node in range(len(self._variables)):
-            node_parent_sum = 0
-            for parent_node in range(len(self._variables)):
-                # Is it a parent
-                if self.conn_matrix[node][parent_node] > self.parent_threshold:
-                    # Compute score
-                    node_parent_sum += self.conn_matrix[node][parent_node] * data(parent_node, row)
-            local_score = log_pi(data(node, row) - node_parent_sum)
-        
-        
-        
-        
-        log_likelihood = 0.0
+        #TODO sum local_scores
+    
 
-        # Compute log-likelihood for discrete variables
-        for i in self.discrete_cols:
-            child_name = self._variables[i]
-            parents = [self._variables[j] for j in self.discrete_cols if j != i]  # Assuming discrete parents
-            log_likelihood += self.discrete_ll.score(child_name, parents)[0]
-
-        # Compute log-likelihood for continuous variables
-        for i in self.continuous_cols:
-            child_name = self._variables[i]
-            parents = [self._variables[j] for j in self.continuous_cols if j != i]  # Assuming continuous parents
-            log_likelihood += self.gaussian_ll.score(child_name, parents)[0]
-
-        return -log_likelihood  # Return negative log-likelihood for minimization
+        
