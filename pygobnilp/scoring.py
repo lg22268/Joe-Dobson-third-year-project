@@ -749,19 +749,52 @@ class MixedData(Data):
                 
                 self._variables = tuple(varnames)
                 
-                self._data = np.zeroes((self.discrete_data.data_length(), len(self._variables)))
+                self._data = np.zeros((self.discrete_data.data_length(), len(self._variables)))
                 self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
                 self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
                 
-                
-                            
+                        
         elif type(data) == MixedData:
             self.continuous_data = data.continuous_data
             self.discrete_data = data.discrete_data
             self._variables = data._variables
             self._data = data._data
-
+            self._is_discrete = data._is_discrete
+            self.discrete_cols = data.discrete_cols
+            self.continuous_cols = data.continuous_cols
         
+        else:
+            print("Data type not supported")
+            
+        self.initialize_biases_from_data()
+        self._varidx = {}
+        for i, v in enumerate(self._variables):
+            self._varidx[v] = i
+            
+    def initialize_biases_from_data(self):
+        """
+        Initializes c_i (biases for discrete variables) using empirical log-odds.
+        """
+        
+        n_nodes = len(self._variables)
+        self.biases = [0.0 for _ in range(n_nodes)]
+
+        # for node in range(n_nodes):
+        #     if self._is_discrete[node]:
+        #         # Get all values for this node
+        #         values = self._data[node]
+        #         p_hat = np.mean(values)  # empirical P(x=1)
+
+        #         # Clip to avoid log(0)#
+        #         # TODO fix: divide by the arities to get a value between 0 and 1
+        #         p_hat = np.clip(p_hat, 1e-5, 1 - 1e-5)
+        #         c_i = np.log(p_hat / (1 - p_hat))
+        #         self.biases[node] = c_i
+        #         print(f"Node {node} bias: {c_i} p_hat: {p_hat}")
+        #     else:
+        #         self.biases[node] = 0.0  # or leave as 0 for continuous nodes
+
+        print("Biases initialized from data: ", self.biases)
        
 # START Classes for penalised log-likelihood 
     
@@ -1481,11 +1514,19 @@ class MixedLL(MixedData):
                 Whether to standardize continuous variables.
         """
         
-        self.conn_matrix = conn_matrix
-        self.parent_threshold = 0.5
-        
         # Initialize MixedData, which processes the file
         super().__init__(data, header=header, comments=comments, delimiter=delimiter, standardise=standardise)
+        
+        self.conn_matrix = conn_matrix
+        if self.conn_matrix is None:
+            # Create a nxn matrix of random weights between 0 and 1, 0 on the diagonal where n is the number of variables
+            n_nodes = len(self._variables)
+            self.conn_matrix = np.random.rand(n_nodes, n_nodes)
+            np.fill_diagonal(self.conn_matrix, 0)
+            
+                    
+        self.parent_threshold = 0.5
+    
 
         # Create instances of DiscreteLL and GaussianLL using the separated datasets
         self.discrete_ll = DiscreteLL(self.discrete_data)
@@ -1493,68 +1534,92 @@ class MixedLL(MixedData):
 
         # Create a boolean mask for discrete variables
         self.discrete_mask = np.array([i in self.discrete_cols for i in range(len(self._variables))])
- 
-        # """Initialize Laplace distribution scoring for a dataset."""
-        # self._data = data
-        # self._n, self._p = data.shape
-        # self._variables = [f"X{i+1}" for i in range(self._p)]
         
         # Compute median and scale (b) for Laplace distribution
-        self._median = np.median(data, axis=0)
-        self._b = np.median(np.abs(data - self._median), axis=0) / np.log(2)
+        self._median = np.median(data._data, axis=0)
+        self._b = np.median(np.abs(data._data - self._median), axis=0) / np.log(2)
 
 
-    # def laplace_log_likelihood(self, variables):
-    #     """
-    #     Compute the Laplace log-likelihood for a subset of variables.
-    #     """
-    #     indices = [self._variables.index(v) for v in variables]
-    #     selected_data = self._data[:, indices]
-
-    #     # Compute Laplace log-likelihood
-    #     ll = -np.log(2 * self._b[indices]).sum() - np.abs(selected_data - self._median[indices]).sum() / self._b[indices]
-
-    #     return ll
-
-    # def laplace_score(self, child, parents):
-    #     """
-    #     Compute the Laplace log-likelihood score for a given child with its parent set.
-    #     """
-    #     parent_ll = self.laplace_log_likelihood(parents)
-    #     family_ll = self.laplace_log_likelihood([child] + parents)
-
-    #     return family_ll - parent_ll
-
-    def log_pi(self, val):
+    def log_pi(self, val, idx):
         """
         Compute the log of the Laplace density function.
         """
-        return -np.log(2 * self._b) - np.abs(val - self._median) / self._b
+        return -np.log(2 * self._b[idx]) - np.abs(val - self._median[idx]) / self._b[idx]
 
-    def compute_log_likelihood(self):
+    
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+
+    def compute_log_likelihood(self, node_idx):
         """
         Computes the negative log-likelihood for mixed data.
 
         Returns:
             float: The negative log-likelihood score for mixed data
         """
+        n_samples = len(self._data[0])
+        n_nodes = len(self._variables)
+        nll = 0.0  # negative log-likelihood accumulator
+
+        for row in range(n_samples):
+
+            x_i_t = self._data[node_idx][row]
+            parent_sum = 0
+
+            # Compute weighted sum from parents
+            for parent_node in range(n_nodes):
+                x_k_t = self._data[parent_node][row]
+                parent_sum += self.conn_matrix[node_idx][parent_node] * x_k_t
+
+            if self._is_discrete[node_idx]:
+                parent_sum += self.biases[node_idx]
+                prob = self.sigmoid(parent_sum)
+
+                # Clip to prevent log(0)
+                prob = np.clip(prob, 1e-10, 1 - 1e-10)
+
+                # Bernoulli log-likelihood
+                ll = x_i_t * np.log(prob) + (1 - x_i_t) * np.log(1 - prob)
+                nll -= ll
+            else:
+                # Laplace log-density of residual: x_i_t - linear_pred
+                residual = x_i_t - parent_sum
+                ll = self.log_pi(residual, node_idx)
+                nll += ll
+
+        return nll
+    
+    
+    def score(self, child, parents):
+        node_idx = self._varidx[child]
+        final_score = self.compute_log_likelihood(node_idx)
+        print(f"Final score for {child} with parents {parents}: {final_score}")
+        return final_score, None
+        
+
+
+    # def compute_log_likelihood(self):
+    #     """
+    #     Computes the negative log-likelihood for mixed data.
+
+    #     Returns:
+    #         float: The negative log-likelihood score for mixed data
+    #     """
         
    
-        for row in range(len(self._data)):
-            for node in range(len(self._variables)):
-                if self._is_discrete[node]:
-                    # TODO
-                    pass
-                else:
-                    node_parent_sum = 0
-                    for parent_node in range(len(self._variables)):
-                        # Is it a parent
-                        if self.conn_matrix[node][parent_node] > self.parent_threshold:
-                            # Compute score
-                            node_parent_sum += self.conn_matrix[node][parent_node] * self._data(parent_node, row)
-                    local_score = self.log_pi(self._data(node, row) - node_parent_sum)
+    #     for row in range(len(self._data)):
+    #         for node in range(len(self._variables)):
+    #             if self._is_discrete[node]:
+    #                 # TODO
+    #                 pass
+    #             else:
+    #                 node_parent_sum = 0
+    #                 for parent_node in range(len(self._variables)):
+    #                     # Compute score
+    #                     node_parent_sum += self.conn_matrix[node][parent_node] * self._data(parent_node, row)
+    #                 local_score = self.log_pi(self._data(node, row) - node_parent_sum)
         
-        #TODO sum local_scores
+    #     #TODO sum local_scores
     
 
         
