@@ -694,11 +694,11 @@ class ContinuousData(Data):
 class MixedData(Data):
     
 
-    def __init__(self, data, varnames=None, header=True, comments='#', delimiter=None, standardise=False):
+    def __init__(self, data, varnames=None, header=True, comments='#', delimiter=None, standardise=False, arities=None):
         
         self.discrete_cols = []
         self.continuous_cols = []
-        
+        self.arities = []
         self._is_discrete = []
         
         # Check arity line
@@ -713,12 +713,13 @@ class MixedData(Data):
                     line = file.readline().rstrip()
                 arity_fields = line.split()
                 for arity_index in range(len(arity_fields)):
-                    if arity_fields[arity_index] == 'c':
+                    if not arity_fields[arity_index].isdigit():
                         self.continuous_cols.append(arity_index)
-                        self._is_discrete.append(False)
+                        self._is_discrete.append(False)      
                     else:
                         self.discrete_cols.append(arity_index)
                         self._is_discrete.append(True)
+                        self.arities.append(int(arity_fields[arity_index]))
                 # Create temp files for discrete and continuous 
                 continuous_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
                 discrete_file = tempfile.NamedTemporaryFile(delete=False, mode='w+t')
@@ -750,7 +751,9 @@ class MixedData(Data):
                 self._variables = tuple(varnames)
                 
                 self._data = np.zeros((self.discrete_data.data_length(), len(self._variables)))
-                self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
+                raw = self.discrete_data.rawdata().astype(np.float32)
+                normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
+                self._data[:, self.discrete_cols] = normalized
                 self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
                 
                         
@@ -762,6 +765,7 @@ class MixedData(Data):
             self._is_discrete = data._is_discrete
             self.discrete_cols = data.discrete_cols
             self.continuous_cols = data.continuous_cols
+            self.arities = arities
         
         else:
             print("Data type not supported")
@@ -1497,7 +1501,7 @@ class BGe(ContinuousData):
     
     
 class MixedLL(MixedData):
-    def __init__(self, data, header=True, comments='#', delimiter=None, standardise=False, conn_matrix=None):
+    def __init__(self, data, header=True, comments='#', delimiter=None, standardise=False):
         """
         Initialize the Mixed Log-Likelihood class
 
@@ -1515,15 +1519,7 @@ class MixedLL(MixedData):
         """
         
         # Initialize MixedData, which processes the file
-        super().__init__(data, header=header, comments=comments, delimiter=delimiter, standardise=standardise)
-        
-        self.conn_matrix = conn_matrix
-        if self.conn_matrix is None:
-            # Create a nxn matrix of random weights between 0 and 1, 0 on the diagonal where n is the number of variables
-            n_nodes = len(self._variables)
-            self.conn_matrix = np.random.rand(n_nodes, n_nodes)
-            np.fill_diagonal(self.conn_matrix, 0)
-            
+        super().__init__(data, header=header, comments=comments, delimiter=delimiter, standardise=standardise)   
                     
         self.parent_threshold = 0.5
     
@@ -1550,26 +1546,27 @@ class MixedLL(MixedData):
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
-    def compute_log_likelihood(self, node_idx):
+    def compute_log_likelihood(self, node_idx, conn_matrix):
         """
         Computes the negative log-likelihood for mixed data.
 
         Returns:
             float: The negative log-likelihood score for mixed data
         """
-        n_samples = len(self._data[0])
+        n_samples = self._data.shape[0]
         n_nodes = len(self._variables)
         nll = 0.0  # negative log-likelihood accumulator
-
+        
+        
         for row in range(n_samples):
 
-            x_i_t = self._data[node_idx][row]
+            x_i_t = self._data[row][node_idx]
             parent_sum = 0
 
             # Compute weighted sum from parents
             for parent_node in range(n_nodes):
-                x_k_t = self._data[parent_node][row]
-                parent_sum += self.conn_matrix[node_idx][parent_node] * x_k_t
+                x_k_t = self._data[row][parent_node]
+                parent_sum += conn_matrix[node_idx][parent_node] * x_k_t
 
             if self._is_discrete[node_idx]:
                 parent_sum += self.biases[node_idx]
@@ -1580,19 +1577,24 @@ class MixedLL(MixedData):
 
                 # Bernoulli log-likelihood
                 ll = x_i_t * np.log(prob) + (1 - x_i_t) * np.log(1 - prob)
-                nll -= ll
+                nll += ll
             else:
                 # Laplace log-density of residual: x_i_t - linear_pred
                 residual = x_i_t - parent_sum
                 ll = self.log_pi(residual, node_idx)
                 nll += ll
 
-        return nll
+        return -nll
     
     
     def score(self, child, parents):
         node_idx = self._varidx[child]
-        final_score = self.compute_log_likelihood(node_idx)
+        
+        conn_matrix = np.zeros((len(self._variables), len(self._variables)))
+        for i in range(len(parents)):
+            conn_matrix[node_idx][self._varidx[parents[i]]] = 1
+        
+        final_score = self.compute_log_likelihood(node_idx, conn_matrix)
         print(f"Final score for {child} with parents {parents}: {final_score}")
         return final_score, None
         
