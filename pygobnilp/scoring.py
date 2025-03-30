@@ -26,6 +26,9 @@ from itertools import combinations
 
 from scipy.special import digamma, gammaln
 from scipy.stats import norm, entropy
+from scipy.optimize import linprog
+
+from sklearn.linear_model import LogisticRegression
 
 import numpy as np
 import pandas as pd
@@ -750,10 +753,16 @@ class MixedData(Data):
                 
                 self._variables = tuple(varnames)
                 
+                # self._data = np.zeros((self.discrete_data.data_length(), len(self._variables)))
+                # raw = self.discrete_data.rawdata().astype(np.float32)
+                # normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
+                # self._data[:, self.discrete_cols] = normalized
+                # self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
+                
                 self._data = np.zeros((self.discrete_data.data_length(), len(self._variables)))
-                raw = self.discrete_data.rawdata().astype(np.float32)
-                normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
-                self._data[:, self.discrete_cols] = normalized
+                # raw = self.discrete_data.rawdata().astype(np.float32)
+                # normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
+                self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
                 self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
                 
                         
@@ -1586,18 +1595,76 @@ class MixedLL(MixedData):
 
         return -nll
     
-    
+    def fit_parameters(self, X, y, is_discrete, lambda_val=0.1):
+        """
+        Fits a single parameter value for a parent variable using either
+        logistic regression (discrete) or LAD regression (continuous).
+        
+        Args:
+            X (ndarray): shape (n_samples,) or (n_samples, 1)
+            y (ndarray): shape (n_samples,), target variable
+            is_discrete (bool): True for classification, False for regression
+            lambda_val (float): regularization strength
+
+        Returns:
+            float: the best-fit parameter value (scalar b_ij)
+        """
+        if X is None or X.size == 0:
+            return 0.0  # no parent → no connection → weight is zero
+
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+
+        if is_discrete:
+            model = LogisticRegression(
+                penalty='l1' if lambda_val > 0 else 'none',
+                C=1/lambda_val if lambda_val > 0 else 1e10,
+                fit_intercept=True,
+                solver='liblinear'
+            )
+            model.fit(X, y)
+            print(f"Weight for discrete variable: {model.coef_[0][0]}")
+            return model.coef_[0][0]  # just the weight for this parent
+
+        else:
+            n_samples = len(y)
+            A_eq = np.hstack([X, -np.eye(n_samples), np.eye(n_samples)])
+            b_eq = y
+            c = np.concatenate([
+                lambda_val * np.ones(1),
+                np.ones(n_samples),
+                np.ones(n_samples)
+            ])
+            bounds = [(-np.inf, np.inf)] + [(0, np.inf)] * (2 * n_samples)
+
+            res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+
+            if not res.success:
+                raise RuntimeError(f"Linear programming failed: {res.message}")
+
+            weight = res.x[0]
+            print(f"Weight for continuous variable: {weight}")
+            return weight
+
+
+
     def score(self, child, parents):
         node_idx = self._varidx[child]
         
         conn_matrix = np.zeros((len(self._variables), len(self._variables)))
         for i in range(len(parents)):
-            conn_matrix[node_idx][self._varidx[parents[i]]] = 1
+            conn_matrix[node_idx][self._varidx[parents[i]]] = self.fit_parameters(
+                self._data[:, self._varidx[parents[i]]], self._data[:, node_idx], self._is_discrete[node_idx], 0.1
+            )
         
         final_score = self.compute_log_likelihood(node_idx, conn_matrix)
         print(f"Final score for {child} with parents {parents}: {final_score}")
         return final_score, None
         
+
+    
+    
+
 
 
     # def compute_log_likelihood(self):

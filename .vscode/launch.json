@@ -22,7 +22,7 @@
                 "2",
                 "--score",
                 "MixedLL",
-                "data/clgaussian.test"
+                "data/mixed_data.dat"
             ]
         }
     ]
