@@ -657,6 +657,10 @@ class ContinuousData(Data):
             data = np.array(data, dtype=float)
 
         try:
+            if len(data.shape) == 1:
+                self._data = data
+                self._variables = []
+                return
             n, p = data.shape
         except ValueError:
             raise ValueError("Data must be a 2-d array")
@@ -1593,7 +1597,7 @@ class MixedLL(MixedData):
                 ll = self.log_pi(residual, node_idx)
                 nll += ll
 
-        return -nll
+        return nll
     
     def fit_parameters(self, X, y, is_discrete, lambda_val=0.1):
         """
