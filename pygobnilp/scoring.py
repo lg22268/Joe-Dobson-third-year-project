@@ -448,7 +448,7 @@ class DiscreteData(Data):
     _arity_type = np.uint8
     _count_type = np.uint32
     
-    def __init__(self, data_source, varnames = None, arities = None):
+    def __init__(self, data_source, varnames = None, arities = None, binary = False):
         '''Initialises a `DiscreteData` object.
 
         If  `data_source` is a filename then it is assumed that:
@@ -481,11 +481,17 @@ class DiscreteData(Data):
         '''
 
         if type(data_source) == str:
-            with open(data_source, "r") as file:
-                line = file.readline().rstrip()
-                while len(line) == 0 or line[0] == '#':
-                    line = file.readline().rstrip()
-                varnames = line.split()
+            # If file is empty
+            with open(data_source, "r") as file:    
+                line = file.readline()
+                while len(line) == 0 or len(line.rstrip()) == 0 or line[0] == '#':
+                    if len(line) == 0:
+                        self._data = []
+                        self._variables = []
+                        self._data_length = 0
+                        return
+                    line = file.readline()
+                varnames = line.rstrip().split()
                 line = file.readline().rstrip()
                 while len(line) == 0 or line[0] == '#':
                     line = file.readline().rstrip()
@@ -502,6 +508,8 @@ class DiscreteData(Data):
                         self._dkt = {}
 
                     def __call__(self,s):
+                        if binary:
+                            return s
                         try:
                             return self._dkt[s]
                         except KeyError:
@@ -751,7 +759,7 @@ class MixedData(Data):
                          
                 # Construct discrete and continuous data objects
                 self.continuous_data = ContinuousData(continuous_file_name)
-                self.discrete_data = DiscreteData(discrete_file_name)
+                self.discrete_data = DiscreteData(discrete_file_name, binary=True)
                 os.remove(continuous_file_name)
                 os.remove(discrete_file_name)
                 
@@ -763,7 +771,7 @@ class MixedData(Data):
                 # self._data[:, self.discrete_cols] = normalized
                 # self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
                 
-                self._data = np.zeros((self.discrete_data.data_length(), len(self._variables)))
+                self._data = np.zeros(max((self.discrete_data.data_length(),self.continuous_data._data_length()), len(self._variables)))
                 # raw = self.discrete_data.rawdata().astype(np.float32)
                 # normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
                 self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
@@ -1559,7 +1567,7 @@ class MixedLL(MixedData):
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
-    def compute_log_likelihood(self, node_idx, conn_matrix):
+    def compute_log_likelihood(self, node_idx, conn_matrix, lambda_sparse=1):
         """
         Computes the negative log-likelihood for mixed data.
 
@@ -1570,6 +1578,9 @@ class MixedLL(MixedData):
         n_nodes = len(self._variables)
         nll = 0.0  # negative log-likelihood accumulator
         
+        
+        # Count parents of node_idx for sparsity regularization
+        num_parents = np.count_nonzero(conn_matrix[node_idx])
         
         for row in range(n_samples):
 
@@ -1590,14 +1601,17 @@ class MixedLL(MixedData):
 
                 # Bernoulli log-likelihood
                 ll = x_i_t * np.log(prob) + (1 - x_i_t) * np.log(1 - prob)
-                nll += ll
+                nll -= ll
             else:
                 # Laplace log-density of residual: x_i_t - linear_pred
                 residual = x_i_t - parent_sum
                 ll = self.log_pi(residual, node_idx)
-                nll += ll
+                nll -= ll
+                
+        # Add sparsity regularizer penalty (L0 regularizer)
+        nll -= lambda_sparse * num_parents
 
-        return nll
+        return -nll
     
     def fit_parameters(self, X, y, is_discrete, lambda_val=0.1):
         """

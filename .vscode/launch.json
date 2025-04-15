@@ -22,7 +22,7 @@
                 "2",
                 "--score",
                 "MixedLL",
-                "data/wet_ground_data_randomized.txt"
+                "data/sun-temp-dryness.txt"
             ]
         }
     ]
