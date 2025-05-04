@@ -20,6 +20,9 @@ def generate_samples(n_samples: int) -> pd.DataFrame:
         "ground_dryness": ground_dryness
     })
 
+    # Normalize each column to [0, 1]
+    df = (df - df.min()) / (df.max() - df.min())
+    
     return df
 
 

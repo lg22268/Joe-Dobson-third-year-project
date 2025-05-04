@@ -668,6 +668,7 @@ class ContinuousData(Data):
             if len(data.shape) == 1:
                 self._data = data
                 self._variables = []
+                self._data_length = 0
                 return
             n, p = data.shape
         except ValueError:
@@ -771,7 +772,7 @@ class MixedData(Data):
                 # self._data[:, self.discrete_cols] = normalized
                 # self._data[:, self.continuous_cols] = self.continuous_data.rawdata()
                 
-                self._data = np.zeros(max((self.discrete_data.data_length(),self.continuous_data._data_length()), len(self._variables)))
+                self._data = np.zeros((max(self.discrete_data.data_length(),self.continuous_data._data_length), len(self._variables)))
                 # raw = self.discrete_data.rawdata().astype(np.float32)
                 # normalized = raw / (np.array(self.arities) - 1)  # auto-broadcast
                 self._data[:, self.discrete_cols] = self.discrete_data.rawdata()
@@ -1554,20 +1555,22 @@ class MixedLL(MixedData):
         
         # Compute median and scale (b) for Laplace distribution
         self._median = np.median(data._data, axis=0)
-        self._b = np.median(np.abs(data._data - self._median), axis=0) / np.log(2)
+        self._b = np.mean(np.abs(data._data - self._median), axis=0) / np.log(2)
 
 
     def log_pi(self, val, idx):
         """
         Compute the log of the Laplace density function.
         """
-        return -np.log(2 * self._b[idx]) - np.abs(val - self._median[idx]) / self._b[idx]
+        log_laplace = -np.log(2 * self._b[idx]) - np.abs(val - self._median[idx]) / self._b[idx]
+        #print(f"Computing log_pi for value {val} at index {idx} with median {self._median[idx]} and scale {self._b[idx]} output: {log_laplace}")
+        return log_laplace
 
     
     def sigmoid(self, x):
         return 1 / (1 + np.exp(-x))
 
-    def compute_log_likelihood(self, node_idx, conn_matrix, lambda_sparse=1):
+    def compute_log_likelihood(self, node_idx, conn_matrix, lambda_sparse=5):
         """
         Computes the negative log-likelihood for mixed data.
 
@@ -1606,29 +1609,79 @@ class MixedLL(MixedData):
                 # Laplace log-density of residual: x_i_t - linear_pred
                 residual = x_i_t - parent_sum
                 ll = self.log_pi(residual, node_idx)
-                nll -= ll
+                nll += ll
                 
         # Add sparsity regularizer penalty (L0 regularizer)
-        nll -= lambda_sparse * num_parents
+        nll += lambda_sparse * num_parents
 
         return -nll
     
-    def fit_parameters(self, X, y, is_discrete, lambda_val=0.1):
-        """
-        Fits a single parameter value for a parent variable using either
-        logistic regression (discrete) or LAD regression (continuous).
+    # def fit_parameters(self, X, y, is_discrete, lambda_val=0.1):
+    #     """
+    #     Fits a single parameter value for a parent variable using either
+    #     logistic regression (discrete) or LAD regression (continuous).
         
+    #     Args:
+    #         X (ndarray): shape (n_samples,) or (n_samples, 1)
+    #         y (ndarray): shape (n_samples,), target variable
+    #         is_discrete (bool): True for classification, False for regression
+    #         lambda_val (float): regularization strength
+
+    #     Returns:
+    #         float: the best-fit parameter value (scalar b_ij)
+    #     """
+    #     if X is None or X.size == 0:
+    #         return 0.0  # no parent → no connection → weight is zero
+
+    #     if X.ndim == 1:
+    #         X = X.reshape(-1, 1)
+
+    #     if is_discrete:
+    #         model = LogisticRegression(
+    #             penalty='l1' if lambda_val > 0 else 'none',
+    #             C=1/lambda_val if lambda_val > 0 else 1e10,
+    #             fit_intercept=True,
+    #             solver='liblinear'
+    #         )
+    #         model.fit(X, y)
+    #         print(f"Weight for discrete variable: {model.coef_[0][0]}")
+    #         return model.coef_[0][0]  # just the weight for this parent
+
+    #     else:
+    #         n_samples = len(y)
+    #         A_eq = np.hstack([X, -np.eye(n_samples), np.eye(n_samples)])
+    #         b_eq = y
+    #         c = np.concatenate([
+    #             lambda_val * np.ones(1),
+    #             np.ones(n_samples),
+    #             np.ones(n_samples)
+    #         ])
+    #         bounds = [(-np.inf, np.inf)] + [(0, np.inf)] * (2 * n_samples)
+
+    #         res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+
+    #         if not res.success:
+    #             raise RuntimeError(f"Linear programming failed: {res.message}")
+
+    #         weight = res.x[0]
+    #         print(f"Weight for continuous variable: {weight}")
+    #         return weight
+
+    def fit_parameters_multi(self, X, y, is_discrete, lambda_val=0.1):
+        """
+        Fits parameter values for a full parent set using logistic or LAD regression.
+
         Args:
-            X (ndarray): shape (n_samples,) or (n_samples, 1)
-            y (ndarray): shape (n_samples,), target variable
+            X (ndarray): shape (n_samples, n_parents)
+            y (ndarray): shape (n_samples,)
             is_discrete (bool): True for classification, False for regression
             lambda_val (float): regularization strength
 
         Returns:
-            float: the best-fit parameter value (scalar b_ij)
+            np.ndarray: array of fitted weights (shape: n_parents,)
         """
         if X is None or X.size == 0:
-            return 0.0  # no parent → no connection → weight is zero
+            return np.zeros((0,))
 
         if X.ndim == 1:
             X = X.reshape(-1, 1)
@@ -1641,43 +1694,63 @@ class MixedLL(MixedData):
                 solver='liblinear'
             )
             model.fit(X, y)
-            print(f"Weight for discrete variable: {model.coef_[0][0]}")
-            return model.coef_[0][0]  # just the weight for this parent
+            print("Weights for discrete variable:", model.coef_[0])
+            return model.coef_[0]  # shape: (n_parents,)
 
         else:
-            n_samples = len(y)
+            # LAD regression via linear programming
+            n_samples, n_parents = X.shape
             A_eq = np.hstack([X, -np.eye(n_samples), np.eye(n_samples)])
             b_eq = y
             c = np.concatenate([
-                lambda_val * np.ones(1),
+                lambda_val * np.ones(n_parents),
                 np.ones(n_samples),
                 np.ones(n_samples)
             ])
-            bounds = [(-np.inf, np.inf)] + [(0, np.inf)] * (2 * n_samples)
+            bounds = [(-np.inf, np.inf)] * n_parents + [(0, np.inf)] * (2 * n_samples)
 
             res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
 
             if not res.success:
-                raise RuntimeError(f"Linear programming failed: {res.message}")
+                raise RuntimeError(f"LAD Linear programming failed: {res.message}")
 
-            weight = res.x[0]
-            print(f"Weight for continuous variable: {weight}")
-            return weight
-
+            weights = res.x[:n_parents]
+            print("Weights for continuous variable:", weights)
+            return weights
 
 
     def score(self, child, parents):
         node_idx = self._varidx[child]
-        
+        parent_idxs = [self._varidx[p] for p in parents]
+
+        X = self._data[:, parent_idxs]
+        y = self._data[:, node_idx]
+
+        weights = self.fit_parameters_multi(X, y, self._is_discrete[node_idx], lambda_val=0.1)
+
         conn_matrix = np.zeros((len(self._variables), len(self._variables)))
-        for i in range(len(parents)):
-            conn_matrix[node_idx][self._varidx[parents[i]]] = self.fit_parameters(
-                self._data[:, self._varidx[parents[i]]], self._data[:, node_idx], self._is_discrete[node_idx], 0.1
-            )
-        
+        for i, parent_idx in enumerate(parent_idxs):
+            conn_matrix[node_idx][parent_idx] = weights[i]
+
+        print(f"Connection matrix for {child} with parents {parents}:")
+        print(conn_matrix)
         final_score = self.compute_log_likelihood(node_idx, conn_matrix)
         print(f"Final score for {child} with parents {parents}: {final_score}")
         return final_score, None
+
+
+    # def score(self, child, parents):
+    #     node_idx = self._varidx[child]
+        
+    #     conn_matrix = np.zeros((len(self._variables), len(self._variables)))
+    #     for i in range(len(parents)):
+    #         conn_matrix[node_idx][self._varidx[parents[i]]] = self.fit_parameters(
+    #             self._data[:, self._varidx[parents[i]]], self._data[:, node_idx], self._is_discrete[node_idx], 0.1
+    #         )
+        
+    #     final_score = self.compute_log_likelihood(node_idx, conn_matrix)
+    #     print(f"Final score for {child} with parents {parents}: {final_score}")
+    #     return final_score, None
         
 
     
