@@ -22,8 +22,18 @@
                 "2",
                 "--score",
                 "MixedLL",
-                "data/sun-temp-dryness.txt"
+                "data/rain-sprinkler-wet.txt"
             ]
+        },
+        {
+            "name": "Performance Test",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "performance_test.py",
+            "console": "integratedTerminal",
+            "env": {
+                "CONDA_DEFAULT_ENV": "base"
+            }
         }
     ]
 }

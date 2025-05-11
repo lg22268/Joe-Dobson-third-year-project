@@ -63,4 +63,4 @@ def main(n=None, out=None):
 
 
 if __name__ == "__main__":
-    main(100, 'rain-sprinkler-wet.txt')
+    main(1000, 'rain-sprinkler-wet.txt')
